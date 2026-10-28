@@ -1,21 +1,50 @@
 # SCVD Kaggle experiment pipeline
 
-Companion code for the paper *Dependency-Aware Multi-Label Deep Learning for Smart
-Contract Vulnerability Detection* (Methodology, Section 3). One notebook per
-experiment stage; every stage writes **results (CSV), logs, LaTeX tables and
-journal-quality plots (vector PDF + 300 dpi PNG)** into its output folder and then
-**pushes that folder as a versioned Kaggle dataset** using your credentials.
+Companion code for the paper *Do Label Dependencies Help? A Systematic Evaluation of
+Dependency-Aware Deep Learning for Smart-Contract Vulnerability Detection*
+(Journal of Cyber Security, submission JCS-92825). One notebook per experiment
+stage; every stage writes **results (CSV), logs, LaTeX tables and journal-quality
+plots (vector PDF + 300 dpi PNG)** into its output folder and then **pushes that
+folder as a versioned Kaggle dataset** using your credentials.
+
+> **Version note.** This is the final code used for every result in the revised
+> manuscript (runs of 24–25 September 2026). The notebooks are the executed ones,
+> with their saved outputs. See `CHANGELOG.md` for what changed since the first
+> public version.
 
 | Stage | Notebook | Pushed dataset (slug) | Contents (experiments) |
 |---|---|---|---|
 | 1 | `stage1_data_eda.ipynb` | `scvd-stage1-eda` | schema check, label stats, co-occurrence matrix, S1/S2/S3 splits (`splits.csv` reused by all later stages) |
 | 2 | `stage2_baselines.ipynb` | `scvd-stage2-baselines` | E1/E7: RF-BR, LGBM-BR, CC-ens, RAkEL, ML-kNN on S1 × 3 views × 3 seeds |
-| 3 | `stage3_deep.ipynb` | `scvd-stage3-deep` | E1/E2: LGC, LAT, LAT-mask, BR-trunk, WIDENNET on S1; hyper-search; family-token ablation; test predictions saved |
-| 4 | `stage4_generalization.ipynb` | `scvd-stage4-generalization` | E3/E4 (RQ3): compiler-era shift S2 and temporal shift S3, full suite |
-| 5 | `stage5_interpretability.ipynb` | `scvd-stage5-interpretability` | E5/E6: LGC adjacency vs LAT attention vs empirical co-occurrence; tool-agreement and majority-vote robustness |
+| 3 | `stage3_deep.ipynb` | `scvd-stage3-deep` | E1/E2: LGC, LAT, LAT-mask, BR-trunk, WIDENNET on S1 × 3 views × 3 seeds, with a 16-configuration hyper-search per (model, view); leave-one-family-out ablation; test predictions saved |
+| 4 | `stage4_generalization.ipynb` | `scvd-stage4-generalization` | E3/E4 (RQ3): compiler-era shift S2 and temporal shift S3 for **all ten models** × 3 views × 3 seeds; per-label test counts; paired-bootstrap tests on S2/S3; the S1 paired-bootstrap and Holm tests of the paper (last cell) |
+| 5 | `stage5_interpretability.ipynb` | `scvd-stage5-interpretability` | E5/E6: LGC adjacency vs LAT attention vs empirical co-occurrence over 3 seeds, layer- and head-resolved attention; tool-agreement and majority-vote robustness; opcode-free circularity ablation |
 
-Every figure is regenerable from the saved artifacts, e.g.
-`scvd.plot_model_macro_f1(pd.read_csv('results/stage3_summary.csv'), root, 's3_deep_macro_f1')`.
+`paper_figures/` regenerates Figures 3 and 5 of the paper from the archived result
+tables (`python make_fig3_fig5.py`, run inside that folder).
+
+## Experimental settings (as run)
+
+* **Seeds.** `scvd.RNG_SEEDS = (0, 1, 2)`. `scvd.set_seed(seed)` seeds Python, NumPy
+  and PyTorch (CPU and CUDA) before every deep-model run. Non-deterministic GPU kernels
+  are not forced deterministic, so repeated runs can differ slightly.
+* **Hyper-search.** Stage 3 only (S1): 16 configurations per (model, view) over
+  learning rate {3e-4, 1e-3}, d_m {128, 256}, layers {2, 3} and τ {0.1, 0.3}
+  (τ affects only LGC; layers only LAT, LAT-mask and BR-trunk; WIDENNET only lr and
+  d_m), i.e. 5 × 3 × 16 = 240 fits, one (unseeded) training run per configuration, selected on
+  validation macro-F1; the selected configuration is then retrained with seeds 0, 1, 2.
+* **Fixed configuration elsewhere.** Stage 4 (S2/S3), the stage-3 family ablation and
+  stage 5 use lr 1e-3, d_m 128, 3 layers, τ = 0.2 for every deep model.
+* **Training.** AdamW (weight decay 1e-4), cosine schedule, batch 256, 120 epochs,
+  gradient clipping 1.0, BCE with per-label `pos_weight` = (N − N_j)/N_j; checkpoint
+  chosen by validation macro-F1 at threshold 0.5; per-label thresholds then tuned on
+  validation over {0.05, …, 0.95}.
+* **Classical baselines** (fixed, untuned, no class weights): RF 300 trees;
+  LightGBM 200 rounds, lr 0.05, 31 leaves; 10 classifier chains (logistic regression);
+  RAkEL 12 subsets of size 3 (liblinear logistic regression); ML-kNN k = 10, s = 1.
+* **S2** removes `CompilerVersion` from the inputs. **S3** removes no feature; the raw
+  timestamp is never an input, but age-correlated transaction features
+  (`confirmations`, `nonce`, `NoOfTransactions`) are retained.
 
 ## One-time setup (you, ~10 minutes)
 
@@ -43,7 +72,7 @@ Run stages **in order 1 → 5**. Stages 3–5: enable a GPU accelerator (T4/P100
 enough; all models are < 2 M parameters). Set the environment variable
 `SCVD_QUICK=1` for a fast smoke run (1 seed, 30–60 epochs, reduced hyper-search).
 Expected wall time on a T4: stage 1 ≈ 2 min, stage 2 ≈ 40–60 min (CPU-bound), stage 3 ≈ 2–4 h,
-stage 4 ≈ 2–4 h, stage 5 ≈ 1 h.
+stage 4 longer than stage 3 (all ten models under both shifts), stage 5 ≈ 1–2 h.
 
 **Classical baseline speed.** Linear base learners (chains, label-powerset) and
 ML-kNN use train-only $z$-scoring and early-converging solvers; measured on the real
@@ -54,9 +83,10 @@ per run (4-core CPU), with unchanged CC-ens scores.
 `results/stageN_results.csv`, so a killed or restarted kernel never loses completed
 runs. Stage 2 additionally *skips* any (model, view, seed) combination already present
 in that CSV when the cell is re-executed, i.e. you can simply re-run the notebook after a
-restart and it continues where it stopped. Stages 3–4 do not skip (hyper-parameter search
-state is not resumable) but `write_summary` de-duplicates rows, so accidental double runs
-cannot corrupt the summary tables.
+restart and it continues where it stopped. Stage 4 skips already-checkpointed (model, view, split, seed) runs in the same way.
+Stage 3 does not skip (hyper-parameter search state is not resumable), but
+`write_summary` de-duplicates rows, so accidental double runs cannot corrupt the
+summary tables.
 
 Each run appends to `logs/<stage>.log` and `logs/run_env.json` (library versions,
 GPU name, seed, quick flag), so any number in a plot can be traced back to a run.

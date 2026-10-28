@@ -1,0 +1,31 @@
+model,split,macro_f1,macro_f1_sd,source
+LGBM-BR,S1,0.835,0.0,Table 4
+LGBM-BR,S2,0.499,0.0,Table 6 (mean); stage-4 run log (sd)
+LGBM-BR,S3,0.554,0.0,Table 6 (mean); stage-4 run log (sd)
+RF-BR,S1,0.821,0.003,Table 4
+RF-BR,S2,0.514,0.0102,Table 6 (mean); stage-4 run log (sd)
+RF-BR,S3,0.552,0.0038,Table 6 (mean); stage-4 run log (sd)
+LAT-mask,S1,0.797,0.0,Table 4
+LAT-mask,S2,0.488,0.0096,Table 6 (mean); stage-4 run log (sd)
+LAT-mask,S3,0.543,0.0145,Table 6 (mean); stage-4 run log (sd)
+BR-trunk,S1,0.799,0.005,Table 4
+BR-trunk,S2,0.488,0.0033,Table 6 (mean); stage-4 run log (sd)
+BR-trunk,S3,0.532,0.005,Table 6 (mean); stage-4 run log (sd)
+LAT,S1,0.795,0.004,Table 4
+LAT,S2,0.488,0.0006,Table 6 (mean); stage-4 run log (sd)
+LAT,S3,0.534,0.0118,Table 6 (mean); stage-4 run log (sd)
+LGC,S1,0.784,0.004,Table 4
+LGC,S2,0.477,0.0105,Table 6 (mean); stage-4 run log (sd)
+LGC,S3,0.502,0.023,Table 6 (mean); stage-4 run log (sd)
+CC-ens,S1,0.741,0.0,Table 4
+CC-ens,S2,0.474,0.0005,Table 6 (mean); stage-4 run log (sd)
+CC-ens,S3,0.501,0.0018,Table 6 (mean); stage-4 run log (sd)
+ML-kNN,S1,0.74,0.0,Table 4
+ML-kNN,S2,0.475,0.0,Table 6 (mean); stage-4 run log (sd)
+ML-kNN,S3,0.524,0.0,Table 6 (mean); stage-4 run log (sd)
+RAkEL,S1,0.732,0.005,Table 4
+RAkEL,S2,0.486,0.0083,Table 6 (mean); stage-4 run log (sd)
+RAkEL,S3,0.511,0.0069,Table 6 (mean); stage-4 run log (sd)
+WIDENNET,S1,0.719,0.001,Table 4
+WIDENNET,S2,0.421,0.0066,Table 6 (mean); stage-4 run log (sd)
+WIDENNET,S3,0.472,0.0068,Table 6 (mean); stage-4 run log (sd)

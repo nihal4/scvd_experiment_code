@@ -355,7 +355,8 @@ def all_metrics(y_true, pred, probs):
            "micro_f1": f1(y_true.ravel(), pred.ravel()),
            "hamming": float(hamming_loss(y_true, pred)),
            "subset_acc": float((pred == y_true).all(1).mean()),
-           "macro_ap": float(np.nanmean(pap))}
+           "macro_ap": float(np.nanmean(pap)),
+           "macro_auc": float(np.nanmean(pa))}
     out.update({f"f1_{LABEL_SHORT[j]}": pf[j] for j in range(8)})
     out.update({f"auc_{LABEL_SHORT[j]}": pa[j] for j in range(8)})
     return out
@@ -522,27 +523,16 @@ def plot_shift_degradation(summ, root, log=None):
     plt = style(); fig, ax = plt.subplots(figsize=(5.6, 2.6))
     s = summ[summ["view"] == "all"]
     models = list(s["model"].unique()); w = 0.26
-    s1 = s[s["split"] == "S1"].set_index("model")["macro_f1"]
-    if len(s1):                       # order by in-distribution performance so
-        models = sorted(models, key=lambda mo: -s1.get(mo, -1.0))  # the shift
-    CLASS = {"LGBM-BR", "RF-BR", "CC-ens", "RAkEL", "ML-kNN"}      # ordering
-    plt.rcParams["hatch.linewidth"] = 0.7                          # is visible
     for i, sp in enumerate(["S1", "S2", "S3"]):
         sub = s[s["split"] == sp].set_index("model")
         m = [sub["macro_f1"].get(mo, np.nan) for mo in models]
         sd = [sub["macro_f1_sd"].get(mo, np.nan) if "macro_f1_sd" in sub else np.nan for mo in models]
         ax.bar(np.arange(len(models)) + i * w, m, w, yerr=sd, capsize=2, color=OKABE[i],
-               label=sp, error_kw={"lw": 0.6},
-               hatch=["//" if mo in CLASS else None for mo in models],
-               edgecolor="white")
+               label=sp, error_kw={"lw": 0.6})
     ax.set_xticks(np.arange(len(models)) + w)
     ax.set_xticklabels(models, rotation=30, ha="right")
     ax.set_ylabel("macro-F1 ($\\mathcal{F}_{\\mathrm{all}}$)"); ax.set_ylim(0, 1)
-    from matplotlib.patches import Patch
-    h, l = ax.get_legend_handles_labels()
-    h += [Patch(facecolor="0.88", edgecolor="white", hatch="//",
-                label="classical/transf."), Patch(facecolor="0.88", label="deep")]
-    ax.legend(handles=h, ncol=5, fontsize=6.5)
+    ax.legend(ncol=3)
     fig.tight_layout(); savefig(fig, root, "s4_shift_degradation", log)
 
 def plot_dependency_maps(M, A, attn, root, log=None):
@@ -550,17 +540,12 @@ def plot_dependency_maps(M, A, attn, root, log=None):
     for ax, mat, ti in zip(axes, [M, A, attn],
                            ["empirical co-occurrence M", "LGC adjacency A",
                             "LAT label--label attention"]):
-        own = mat is attn
-        im = ax.imshow(mat, cmap="magma",
-                       vmin=mat.min() if own else 0,
-                       vmax=mat.max() if own else max(mat.max(), 1e-6))
+        im = ax.imshow(mat, cmap="magma", vmin=0, vmax=max(mat.max(), 1e-6))
         ax.set_xticks(range(8)); ax.set_yticks(range(8))
         ax.set_xticklabels(LABEL_SHORT, rotation=45, ha="right", fontsize=6.5)
         ax.set_yticklabels(LABEL_SHORT, fontsize=6.5)
         ax.set_title(ti, fontsize=7.5); ax.grid(visible=False)
-        cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-        cb.set_label("attention (own scale)" if mat is attn else
-                     ("P(j|i)" if mat is M else "A"), fontsize=6.5)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
     fig.tight_layout(); savefig(fig, root, "s5_dependency_maps", log)
 
 def plot_robustness(res, root, log=None):
@@ -583,10 +568,6 @@ def plot_family_ablation(drop, root, log=None):
     ax.set_xticks(np.arange(len(fams)) + w * (len(models) - 1) / 2)
     ax.set_xticklabels(fams, rotation=25, ha="right")
     ax.set_ylabel("$\\Delta$ macro-F1 when family removed"); ax.legend()
-    vals = [drop[f][mo] for f in fams for mo in models]
-    ax.axhline(0, color="0.3", lw=0.7)          # negative = family hurts when
-    ax.set_ylim(min(-0.01, min(vals) - 0.005),  # present; keep it visible
-                max(vals) * 1.08)
     fig.tight_layout(); savefig(fig, root, "s3_family_ablation", log)
 
 # ------------------------------------------------------------- torch models -
@@ -914,6 +895,49 @@ def push_dataset(root, stage, slug, title, log=None):
     return url
 
 # ------------------------------------------------- orchestration helpers ----
+def make_data_excluding(pre, post, lab, fam, exclude, ids_tr, ids_va, ids_te):
+    """Like make_data(view='all') but with the named families dropped entirely, not
+    just their columns zeroed -- for the R2#3 feature/label-circularity ablation
+    (drop families that overlap with what the six labeling tools themselves inspect,
+    e.g. the opcode families, and check whether predictive performance survives on
+    what's left). Zeroing columns instead of removing the family key would still
+    count as a family token in LAT's architecture (self.k = len(fams)); this drops
+    the key so self.k correctly reflects only the families actually used."""
+    keep = [n for n in (PRE_FAMS + POST_FAMS) if n not in exclude]
+    vf = {n: fam[n] for n in keep}
+    pre_need = [c for n in PRE_FAMS if n in vf for c in vf[n]]
+    post_need = [c for n in POST_FAMS if n in vf for c in vf[n]]
+    cats = {**CATS_PRE, **CATS_POST}
+    src_ = {}
+    if pre_need:
+        src_["pre"] = {"df": pre.set_index("contractID")[pre_need], "cols": pre_need}
+    if post_need:
+        src_["post"] = {"df": post.set_index("contractID")[post_need], "cols": post_need}
+    lab_i = lab.set_index("contractID")
+    parts = {}
+    for part, ids in (("tr", ids_tr), ("va", ids_va), ("te", ids_te)):
+        s = set(ids)
+        parts[part] = {k: v["df"][v["df"].index.isin(s)] for k, v in src_.items()}
+    preps = {k: Prep(v["cols"], {c: cc for c, cc in cats.items() if c in v["cols"]})
+             .fit(parts["tr"][k].reset_index()) for k, v in src_.items()}
+    out = {"fams": vf}
+    for part in ("tr", "va", "te"):
+        A, offs = {}, {}
+        blocks = []
+        for k in src_:
+            Ak = preps[k].transform(parts[part][k].reset_index())
+            offs[k] = {c: j for j, c in enumerate(src_[k]["cols"])}
+            A[k] = Ak; blocks.append(Ak)
+        out["x_" + part] = {}
+        for n in vf:
+            k = "pre" if n in PRE_FAMS else "post"
+            out["x_" + part][n] = A[k][:, [offs[k][c] for c in vf[n]]]
+        out["X_" + part] = np.hstack(blocks)
+        ids_p = parts[part][next(iter(src_))].index.to_numpy()
+        out["ids_" + part] = ids_p
+        out["y_" + part] = lab_i.loc[ids_p, LABELS].to_numpy(int)
+    return out
+
 def make_data(pre, post, lab, fam, view, ids_tr, ids_va, ids_te):
     """Leakage-safe feature matrices for one view: per-family dict (neural)
     plus a flat matrix (classical baselines). Pre- and post-deployment sources
@@ -994,6 +1018,67 @@ def extract_label_attention(model, data, kind="fam"):
     A = W[:, k:, k:].mean(0).numpy()            # label-label block, instance-mean
     A = A / np.clip(A.sum(1, keepdims=True), 1e-9, None)
     return A
+
+def set_seed(seed):
+    """Seed python, numpy, and torch (CPU+CUDA) for a reproducible deep-model run.
+    Previously the per-seed loops in Stages 3-5 only called np.random.seed(seed),
+    which does not touch torch's RNG -- so weight init, dropout, and data-loader
+    shuffling in train_torch were never actually controlled by `seed`. This fixes
+    that; call it immediately before constructing/training each deep model."""
+    import random
+    torch, nn = _t()
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+def extract_label_attention_full(model, data, kind="fam"):
+    """Layer- and head-resolved label<->label attention of a trained LAT.
+    Returns an array of shape (n_layers, n_heads, 8, 8), row-normalised,
+    averaged over test instances only (heads and layers kept separate,
+    unlike extract_label_attention which averages both)."""
+    torch, nn = _t()
+    dev = next(model.parameters()).device
+    store = {}
+    hooks, origs = [], []
+    for li, layer in enumerate(model.tf.layers):
+        m = layer.self_attn
+        origs.append((m, m.forward))
+        def _fw(*a, _o=None, **kw):
+            kw = dict(kw)
+            kw["need_weights"] = True
+            kw["average_attn_weights"] = False   # keep per-head, unlike extract_label_attention
+            return _o(*a, **kw)
+        m.forward = lambda *a, _o=m.forward, **kw: _fw(*a, _o=_o, **kw)
+        def hk(mod, inp, outp, _li=li):
+            if isinstance(outp, tuple) and len(outp) == 2 and outp[1] is not None:
+                store.setdefault(_li, []).append(outp[1].detach().cpu())
+        hooks.append(m.register_forward_hook(hk))
+    k = model.k
+    with torch.no_grad():
+        for i in range(0, len(data["y_te"]), 2048):
+            idx = np.arange(i, min(i + 2048, len(data["y_te"])))
+            xb = _mk_batch(data, "te", idx, kind, dev)
+            model(xb)
+    for h in hooks:
+        h.remove()
+    for m, orig in origs:
+        m.forward = orig
+    if not store:
+        warnings.warn("extract_label_attention_full: hooks captured no weights; "
+                      "returning identity fallback")
+        n_layers = len(model.tf.layers)
+        return np.tile(np.eye(8), (n_layers, 1, 1, 1))
+    n_layers = len(store)
+    n_heads = store[0][0].shape[1]
+    out = np.zeros((n_layers, n_heads, 8, 8))
+    for li in range(n_layers):
+        W = torch.cat(store[li], 0)                 # (N, heads, n, n)
+        A = W[:, :, k:, k:].mean(0).numpy()          # (heads, 8, 8), instance-mean
+        A = A / np.clip(A.sum(-1, keepdims=True), 1e-9, None)
+        out[li] = A
+    return out
 
 def save_splits(root, splits, pre, lab):
     meta = pre.set_index("contractID")
